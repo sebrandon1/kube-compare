@@ -3,15 +3,28 @@ IMAGE_NAME=kube-compare
 PACKAGE_NAME          := github.com/openshift/kube-compare
 GOLANG_CROSS_VERSION  ?= v1.22.7
 
-# Default values for GOOS and GOARCH
-GOOS ?= linux
-GOARCH ?= amd64
+# Auto-detect host OS and architecture if not explicitly set
+HOST_OS := $(shell go env GOOS)
+HOST_ARCH := $(shell go env GOARCH)
+
+# Default to host OS/Arch for local builds, can be overridden for cross-compilation
+GOOS ?= $(HOST_OS)
+GOARCH ?= $(HOST_ARCH)
 
 # These tags make sure we can statically link and avoid shared dependencies
-GO_BUILD_FLAGS :=-tags 'include_gcs include_oss containers_image_openpgp gssapi'
+GO_BUILD_FLAGS_LINUX :=-tags 'include_gcs include_oss containers_image_openpgp gssapi'
 GO_BUILD_FLAGS_DARWIN :=-tags 'include_gcs include_oss containers_image_openpgp'
 GO_BUILD_FLAGS_WINDOWS :=-tags 'include_gcs include_oss containers_image_openpgp'
 GO_BUILD_FLAGS_LINUX_CROSS :=-tags 'include_gcs include_oss containers_image_openpgp'
+
+# Select appropriate build flags based on target OS
+ifeq ($(GOOS),darwin)
+GO_BUILD_FLAGS := $(GO_BUILD_FLAGS_DARWIN)
+else ifeq ($(GOOS),windows)
+GO_BUILD_FLAGS := $(GO_BUILD_FLAGS_WINDOWS)
+else
+GO_BUILD_FLAGS := $(GO_BUILD_FLAGS_LINUX)
+endif
 
 # Inject a version and date via ldflags for the '--version' flag
 # Upstream builds get their ldflags set via goreleaser automatically
@@ -24,7 +37,7 @@ else
 	# For manual builds, use 'git describe' based on the latest tag
 	BUILD_VERSION ?= $(shell git describe --tag | sed -e 's/^v//')
 endif
-BUILD_DATE ?= $(shell date --rfc-3339=seconds)
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GO_LDFLAGS := -ldflags="-X 'main.version=$(BUILD_VERSION)' -X 'main.date=$(BUILD_DATE)'"
 
 OUTPUT_DIR :=_output
@@ -58,11 +71,30 @@ build:
 	mkdir -p $(GO_BUILD_BINDIR)
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=vendor $(GO_BUILD_FLAGS) $(GO_LDFLAGS) -o $(GO_BUILD_BINDIR)/kubectl-cluster_compare ./cmd/kubectl-cluster_compare.go
 
-# Install the plugin and completion script in /usr/local/bin
+# Install the plugin and completion script in /usr/local/bin (requires sudo on most systems)
 .PHONY: install
 install:
+	@if [ ! -w $(DESTDIR) ]; then \
+		echo "Error: No write permission to $(DESTDIR)"; \
+		echo "Try one of the following:"; \
+		echo "  - Run 'sudo make install' for system-wide installation"; \
+		echo "  - Run 'make install-user' to install to ~/.local/bin"; \
+		echo "  - Set DESTDIR to a writable directory: 'make install DESTDIR=~/bin'"; \
+		exit 1; \
+	fi
 	install kubectl_complete-cluster_compare $(DESTDIR)
 	install $(GO_BUILD_BINDIR)/kubectl-cluster_compare  $(DESTDIR)
+
+# Install the plugin and completion script in ~/.local/bin (no sudo required)
+.PHONY: install-user
+install-user:
+	@mkdir -p ~/.local/bin
+	install kubectl_complete-cluster_compare ~/.local/bin
+	install $(GO_BUILD_BINDIR)/kubectl-cluster_compare ~/.local/bin
+	@echo ""
+	@echo "Installation complete! Binary installed to ~/.local/bin"
+	@echo "Make sure ~/.local/bin is in your PATH by adding this to your shell config:"
+	@echo '  export PATH="$$HOME/.local/bin:$$PATH"'
 
 .PHONE: test-all
 test-all: test test-report-creator test-helm-convert
