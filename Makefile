@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := help
+
 IMAGE_NAME=kube-compare
 
 PACKAGE_NAME          := github.com/openshift/kube-compare
@@ -65,9 +67,23 @@ else ifeq ($(ENGINE), podman)
   CONTAINER_SOCKETOPT=
 endif
 
+.PHONY: help
+help: ## Display this help message
+	@echo "Available targets:"
+	@echo ""
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make \033[36m<target>\033[0m\n\n"} \
+		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2 } \
+		/^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "Build for current OS (auto-detected: $(HOST_OS)/$(HOST_ARCH)):"
+	@echo "  make build"
+	@echo ""
+	@echo "Cross-compile for Linux:"
+	@echo "  GOOS=linux GOARCH=amd64 make build"
+
 # Build based on OS and Arch. Full list available in https://pkg.go.dev/internal/platform#pkg-variables
 .PHONY: build
-build:
+build: ## Build the kubectl-cluster_compare binary for current platform
 	mkdir -p $(GO_BUILD_BINDIR)
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=vendor $(GO_BUILD_FLAGS) $(GO_LDFLAGS) -o $(GO_BUILD_BINDIR)/kubectl-cluster_compare ./cmd/kubectl-cluster_compare.go
 
@@ -100,7 +116,7 @@ install-user:
 test-all: test test-report-creator test-helm-convert
 
 .PHONY: test
-test:
+test: ## Run tests for pkg/
 	go test --race ./pkg/*
 
 .PHONY: test-report-creator
@@ -134,6 +150,7 @@ markdownlint-image-clean:  ## Remove locally cached markdownlint-image
 	$(ENGINE) image rm $(IMAGE_NAME)-markdownlint:latest
 
 # markdownlint main
+.PHONY: markdownlint
 markdownlint: markdownlint-image  ## run the markdown linter
 	$(ENGINE) run \
 		--rm=true \
@@ -144,7 +161,7 @@ markdownlint: markdownlint-image  ## run the markdown linter
 		$(IMAGE_NAME)-markdownlint:latest
 
 .PHONY: image-build
-image-build:
+image-build: ## Build container image for kube-compare
 	$(ENGINE) build . -t $(IMAGE_NAME):latest
 
 .PHONY: release-dry-run
@@ -198,17 +215,24 @@ cross-build-linux-s390x:
 	+@GOOS=linux GOARCH=s390x GO_BUILD_FLAGS="$(GO_BUILD_FLAGS_LINUX_CROSS)" GO_BUILD_BINDIR=$(CROSS_BUILD_BINDIR)/linux_s390x $(MAKE) --no-print-directory build
 
 .PHONY: cross-build
-cross-build: cross-build-darwin-amd64 cross-build-darwin-arm64 cross-build-windows-amd64 cross-build-linux-amd64 cross-build-linux-arm64 cross-build-linux-ppc64le cross-build-linux-s390x
+cross-build: cross-build-darwin-amd64 cross-build-darwin-arm64 cross-build-windows-amd64 cross-build-linux-amd64 cross-build-linux-arm64 cross-build-linux-ppc64le cross-build-linux-s390x ## Build for all supported platforms
+
+.PHONY: clean
+clean: clean-cross-build ## Clean all build artifacts
 
 .PHONY: clean-cross-build
-clean-cross-build:
+clean-cross-build: ## Clean cross-build artifacts
 	$(RM) -r '$(GO_BUILD_BINDIR)'
 	if [ -d '$(OUTPUT_DIR)' ]; then \
 		$(RM) -r '$(OUTPUT_DIR)'; \
 	fi
 
-.PHONE: dependency-sync
-dependency-sync:
+.PHONY: version
+version: build ## Display version of built binary
+	@$(GO_BUILD_BINDIR)/kubectl-cluster_compare --version
+
+.PHONY: dependency-sync
+dependency-sync: ## Sync Go dependencies (work, vendor, and mod)
 	go work sync
 	go work vendor
 	go mod tidy
